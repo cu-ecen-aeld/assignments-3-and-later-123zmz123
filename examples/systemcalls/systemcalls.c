@@ -1,3 +1,11 @@
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <errno.h>
 #include "systemcalls.h"
 
 /**
@@ -16,7 +24,9 @@ bool do_system(const char *cmd)
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
-
+    int res;
+    res = system(cmd);
+    if(res != 0) return false;
     return true;
 }
 
@@ -36,6 +46,8 @@ bool do_system(const char *cmd)
 
 bool do_exec(int count, ...)
 {
+    int status,res;
+    pid_t pid;
     va_list args;
     va_start(args, count);
     char * command[count+1];
@@ -47,7 +59,7 @@ bool do_exec(int count, ...)
     command[count] = NULL;
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
+    va_end(args);
 
 /*
  * TODO:
@@ -59,7 +71,38 @@ bool do_exec(int count, ...)
  *
 */
 
-    va_end(args);
+   
+
+    pid = fork();
+    if(pid==-1)
+    {
+        perror("fork step wrong");
+        return false;
+    }
+    // when pid 
+    if(!pid)
+    {
+        // execv argumment 1 is the execute path
+        // argument2 is the commmand list
+        res = execv(command[0],command);
+        if(res == -1)
+        {
+            perror("execv step failed");
+            exit(1);
+        }
+
+    }
+
+    pid = waitpid(pid,&status,0);
+    if(pid==-1){
+        perror("wait step failed");
+        return false;
+    }
+
+    if(WEXITSTATUS(status)!=0){
+        perror("exit step failed");
+        return false;
+    }
 
     return true;
 }
@@ -71,6 +114,8 @@ bool do_exec(int count, ...)
 */
 bool do_exec_redirect(const char *outputfile, int count, ...)
 {
+    int status,res,fd;
+    pid_t pid;
     va_list args;
     va_start(args, count);
     char * command[count+1];
@@ -80,9 +125,51 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
+    va_end(args);
     // this line is to avoid a compile warning before your implementation is complete
     // and may be removed
-    command[count] = command[count];
+    fflush(stdout);
+    pid = fork();
+
+    if(pid == -1)
+    {
+        perror("fork step error");
+        return false;
+    }
+
+    if(!pid)
+    {
+        fd = open(outputfile,O_WRONLY|O_TRUNC|O_CREAT,0644);
+        if(fd<0)
+        {
+            perror("open file step failed");
+            exit(1);
+        }
+        if(dup2(fd,1)<0)
+        {
+            perror("dup step failed");
+            exit(1);
+        }
+
+        res = execv(command[0],command);
+        if(res == -1){
+            perror("execv step failed");
+            exit(1);
+        }
+    }
+    
+    pid = waitpid(pid,&status,0);
+    if(pid==-1)
+    {
+        perror("wait step failed");
+        return false;
+    }
+
+    if(WEXITSTATUS(status)!=EXIT_SUCCESS)
+    {
+        perror("exit status");
+        return false;
+    }
 
 
 /*
@@ -93,7 +180,7 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *
 */
 
-    va_end(args);
+    
 
     return true;
 }
