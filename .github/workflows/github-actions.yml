@@ -16,10 +16,7 @@ jobs:
           - name: Run unit test
             run: ./unit-test.sh
     full-test:
-        container: 
-          image: cuaesd/aesd-autotest:assignment3
-          volumes:
-            - /home/zmz/:/home/zmz/
+        container: cuaesd/aesd-autotest:assignment3
         runs-on: self-hosted
         steps:
           - uses: actions/checkout@v2
