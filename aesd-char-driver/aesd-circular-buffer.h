@@ -18,7 +18,7 @@
 
 #define AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED 10
 
-struct aesd_buffer_entry
+typedef struct aesd_buffer_entry
 {
     /**
      * A location where the buffer contents in buffptr are stored
@@ -28,9 +28,9 @@ struct aesd_buffer_entry
      * Number of bytes stored in buffptr
      */
     size_t size;
-};
+} entry_t;
 
-struct aesd_circular_buffer
+typedef struct aesd_circular_buffer
 {
     /**
      * An array of pointers to memory allocated for the most recent write operations
@@ -49,7 +49,7 @@ struct aesd_circular_buffer
      * set to true when the buffer entry structure is full
      */
     bool full;
-};
+}buffer_t;
 
 extern struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
             size_t char_offset, size_t *entry_offset_byte_rtn );
@@ -77,6 +77,7 @@ extern void aesd_circular_buffer_init(struct aesd_circular_buffer *buffer);
             index<AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; \
             index++, entryptr=&((buffer)->entry[index]))
 
-
+#define AESD_CIRCULAR_BUFFER_GET_ENTRY(buffer,index) \
+        (buffer->entry[((buffer->out_offs)+index) % AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED])
 
 #endif /* AESD_CIRCULAR_BUFFER_H */
