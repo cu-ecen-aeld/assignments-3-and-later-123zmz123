@@ -27,14 +27,14 @@
  * NULL if this position is not available in the buffer (not enough data is written).
  */
 struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct aesd_circular_buffer *buffer,
-            size_t char_offset, size_t *entry_offset_byte_rtn )
+            size_t char_offset, size_t *entry_offset_byte_rtn)
 {
     /**
     * TODO: implement per description
     */
     uint8_t index;
     size_t pos=0;
-    entry_t *entry;
+    aesd_buffer_entry_t *entry;
     for (index = 0; index < AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED; index++)
     {
         if(!(buffer->full) && ((buffer->out_offs+index)%AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED)==buffer->in_offs)
@@ -44,6 +44,7 @@ struct aesd_buffer_entry *aesd_circular_buffer_find_entry_offset_for_fpos(struct
         {
             if (pos + entry->size > char_offset)
             {
+                if (entry_offset_byte_rtn)
                 *entry_offset_byte_rtn = char_offset - pos;
                 return entry;
             }

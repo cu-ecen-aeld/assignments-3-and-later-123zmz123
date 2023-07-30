@@ -1,17 +1,23 @@
 #!/bin/sh
+set -e
+
+NAME=aesdsocket
+PIDFILE=/var/run/$NAME.pid
+DAEMON=/usr/bin/aesdsocket
+DAEMON_OPTS="-d"
+SCRIPTNAME=/etc/init.d/S99$NAME
 
 case "$1" in
     start)
-        echo "Starting aesdsocket"
-        start-stop-daemon -S -n aesdsocket -a /usr/bin/aesdsocket -- -d
+        echo "Starting simpleserver"
+        start-stop-daemon --start --quiet -n $NAME --exec $DAEMON -- $DAEMON_OPTS
         ;;
     stop)
-        echo "Stopping aesdsocket"
-        start-stop-daemon -K -n aesdsocket
+        echo "Stopping simpleserver"
+        start-stop-daemon --stop --quiet --oknodo -n $NAME
         ;;
     *)
-        echo "Pls use it as: $0 {start|stop}"
-    exit
+        echo "Usage: $0 {start|stop}"
+    exit 1
 esac
-
 exit 0
