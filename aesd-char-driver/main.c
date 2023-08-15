@@ -22,7 +22,8 @@
 #include <linux/uaccess.h>	/* copy_*_user */
 #include <linux/slab.h>		/* kmalloc() */
 #include "aesdchar.h"
-
+#include "aesd_ioctl.h" // include the correspond definations
+#include <linux/fcntl.h> // include the ioctl correspond header file
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
@@ -30,6 +31,111 @@ MODULE_AUTHOR("zmz");
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct aesd_dev aesd_device;
+
+loff_t  aesd_llseek(struct file *filp, loff_t offset, int whence)
+{
+	struct aesd_dev *dev = filp->private_data;
+	loff_t res;
+
+	if(mutex_lock_interruptible(&dev->circ_buf_lock)) {
+		return -ERESTARTSYS;
+	}	
+
+	res = fixed_size_llseek(filp,offset,whence,dev->circ_buf_size);
+
+	mutex_unlock(&dev->circ_buf_lock);
+	return res;
+}
+
+static long aesd_adjust_file_offset(struct file *filp, uint32_t write_cmd, uint32_t write_cmd_offset)
+{
+		struct aesd_dev *dev = filp->private_data;
+	struct aesd_circular_buffer *circ_buf = &(dev->circ_buf);
+	struct aesd_buffer_entry *entry = NULL;
+	size_t full_offs = 0;
+	uint8_t i=0;
+	long retval=0;
+
+	PDEBUG("Adjust file offset with command %d, offset %d", write_cmd, write_cmd_offset);
+
+	if (write_cmd >= AESDCHAR_MAX_WRITE_OPERATIONS_SUPPORTED){
+		PDEBUG("write command number to large");
+		return -EINVAL;
+	}
+
+	//make f_pos base from command number
+	//collect from previous commands
+	for ( i = 0; i < write_cmd; i ++){
+		entry = &AESD_CIRCULAR_BUFFER_GET_ENTRY(circ_buf, i);
+		if (entry){
+			if (entry->buffptr)
+				full_offs += entry->size;
+			else
+				break;
+		}
+		else{
+			break;
+		}
+	}
+
+	if (i < write_cmd){
+		PDEBUG("Not enough commands written");
+		return -EINVAL;
+	}
+
+	entry = &AESD_CIRCULAR_BUFFER_GET_ENTRY(circ_buf, write_cmd);
+
+	// entry is static as part of global device structure ( aesd_device.circ_buf.entry[write_cmd])
+	// so check for NULL is not necessary
+	if (!entry->buffptr){
+		PDEBUG("Not enough commands written");
+		return -EINVAL;
+	}
+
+	if (write_cmd_offset >= entry -> size){
+		PDEBUG("Offset in command larger then command size");
+		return -EINVAL;
+	}
+
+	full_offs += write_cmd_offset;
+	retval = aesd_llseek(filp, full_offs,SEEK_SET);
+
+	if (retval != full_offs)
+		return retval;
+
+	return 0;
+}
+
+long aesd_ioctl(struct file *filp, unsigned int cmd, unsigned long arg){
+	int retval = -EFAULT;
+
+	if(_IOC_TYPE(cmd)!=AESD_IOC_MAGIC){
+		
+		return -ENOTTY;
+	}
+
+	switch (cmd)
+	{
+	case AESDCHAR_IOCSEEKTO:
+	{
+		struct aesd_seekto seekto;
+		if (!access_ok((void __user *) arg, sizeof(seekto))){
+				PDEBUG("Error access to user space");
+				return -EFAULT;
+			}
+		if (copy_from_user(&seekto, (const void __user *) arg, sizeof(seekto))){
+				retval = -EFAULT;
+			} else{
+				retval = aesd_adjust_file_offset(filp, seekto.write_cmd,seekto.write_cmd_offset);
+			}
+		break;
+	}
+	
+	default:
+		retval = -ENOTTY;
+	}
+	return retval;
+}
 
 int aesd_open(struct inode *inode, struct file *filp)
 {
@@ -61,11 +167,16 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 
     aesd_buffer_entry_t *entry = NULL;
     size_t offs_entry; 
-    size_t offs_full=*f_pos; 
+    size_t offs_full; 
 
 
 	if (mutex_lock_interruptible(&dev->circ_buf_lock))
 		return -ERESTARTSYS;
+	
+	if(f_pos)
+		offs_full = *f_pos;
+	else
+		offs_full = filp->f_pos;
     // our driver perform as a file, and the read command read the bytes which store in the queue in our ram
 	entry = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circ_buf, offs_full, &offs_entry);
 	if (!entry){ //Entry not found
@@ -95,7 +206,9 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 		goto out;
 	}
 
-	*f_pos += count;
+
+	offs_full+=count;
+	*f_pos = offs_full;
 	//offs_full = *f_pos; // for correct printk
 
 
@@ -118,6 +231,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 
 	qentry_node_t *node = NULL;	//queue node, which points to short (working) entry to store in/get from queue
 	aesd_buffer_entry_t *full_cmd = NULL;	//long entry for adding to circular buffer
+	const aesd_buffer_entry_t *del_cmd;
 
 	char *full_buf = NULL; // buffer to collect full command
 	void *del_buf = NULL; // to save pointer to free memory
@@ -248,16 +362,21 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
 
 
 		if (mutex_lock_interruptible(&dev->circ_buf_lock)){
-			return -ERESTARTSYS;
+			retval = -ERESTARTSYS;
 			goto clean_full_buffptr;
 		}
 
 		// We need free memory from first command in buffer
 		if (dev->circ_buf.full)
-			del_buf = (void *)(aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circ_buf, 0, NULL)->buffptr);
+		{
+			del_cmd = aesd_circular_buffer_find_entry_offset_for_fpos(&dev->circ_buf, 0, NULL);
+			del_buf = (void*)(del_cmd->buffptr);
+			dev->circ_buf_size -= del_cmd->size;
+		}
 
 		full_cmd->buffptr = full_buf;
 		aesd_circular_buffer_add_entry(&dev->circ_buf, full_cmd);
+		dev->circ_buf_size += full_cmd->size;
 
 		// data from full_cmd copied to circular buf
 		// here free full_cmd
@@ -296,6 +415,8 @@ struct file_operations aesd_fops = {
     .write =    aesd_write,
     .open =     aesd_open,
     .release =  aesd_release,
+	.llseek = aesd_llseek,
+	.unlocked_ioctl = aesd_ioctl,
 };
 
 static int aesd_setup_cdev(struct aesd_dev *dev)
